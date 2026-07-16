@@ -1,4 +1,5 @@
 import express from 'express'
+import product from '../models/models.js'
 const router = express.Router()
 
 router.get('/', (req, res) => {
@@ -9,9 +10,16 @@ router.get("/:id", (req, res) => {
   console.log("obtener objetop por id")
 })
 
-router.post('/', (req, res) => {
-  res.send('<h1>Creando desde la api👋</h1>');
-  console.log("Crear nuevo objeto")
+router.post('/', async (req, res) => {
+  try {
+    const { name, cant } = req.body
+    const newProduct = new product({ name, cant })
+    const savedProduct = await newProduct.save()
+    res.status(201).json({ message: "Product created succesfully", product: savedProduct })
+  } catch (error) {
+    console.log(error)
+  }
+
 })
 
 router.put("/:id", (req, res) => {
