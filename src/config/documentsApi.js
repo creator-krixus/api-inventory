@@ -1,3 +1,6 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import basicAuth from "express-basic-auth";
 import swaggerUI from 'swagger-ui-express';
 import swaggerJsDocs from 'swagger-jsdoc';
@@ -5,7 +8,7 @@ const swaggerSpec = {
   definition: {
     openapi: "3.0.3",
     info: {
-      title: "Documentation",
+      title: "Inventory API",
       version: "1.0.0"
     },
     servers: [
@@ -73,7 +76,7 @@ export default documents;
  * /api/v1/products:
  *  post:
  *      summary: Create new product
- *      tags: [products]
+ *      tags: [Products]
  *      requestBody:
  *          required: true
  *          content:
@@ -92,7 +95,7 @@ export default documents;
  * /api/v1/products:
  *  get:
  *      summary: Return all products
- *      tags: [products]
+ *      tags: [Products]
  *      responses:
  *          200:
  *              description: All products
@@ -110,7 +113,7 @@ export default documents;
  * /api/v1/products/{id}:
  *  get:
  *      summary: Return a product for identifier unique
- *      tags: [products]
+ *      tags: [Products]
  *      parameters:
  *        - in: path
  *          name: id
@@ -136,7 +139,7 @@ export default documents;
  * /api/v1/products/{id}:
  *  patch:
  *      summary: Update a product
- *      tags: [products]
+ *      tags: [Products]
  *      parameters:
  *        - in: path
  *          name: id
@@ -169,7 +172,7 @@ export default documents;
  * /api/v1/products/{id}:
  *  delete:
  *      summary: Delete a product
- *      tags: [products]
+ *      tags: [Products]
  *      parameters:
  *        - in: path
  *          name: id

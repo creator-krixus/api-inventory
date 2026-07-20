@@ -14,7 +14,11 @@ const productSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
-})
+},
+  {
+    timestamps: true,
+    versionKey: false
+  })
 
 const Product = new mongoose.model('product', productSchema)
 
