@@ -29,7 +29,7 @@ export const updateProduct = async (
     },
     data,
     {
-      new: true,
+      returnDocument: "after",
       runValidators: true,
     }
   );
