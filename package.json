@@ -14,7 +14,10 @@
   "dependencies": {
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "mongoose": "^9.7.4"
+    "express-basic-auth": "^1.2.1",
+    "mongoose": "^9.7.4",
+    "swagger-jsdoc": "^6.3.0",
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
