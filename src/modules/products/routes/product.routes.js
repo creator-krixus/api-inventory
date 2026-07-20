@@ -6,18 +6,19 @@ import {
   updateProduct,
   deleteProduct
 } from "../controllers/product.controller.js";
+import authMiddleware from "../../auth/middlewares/auth.middleware.js";
 const router = express.Router()
 
 
-router.get("/", getProducts);
+router.get("/", authMiddleware, getProducts);
 
-router.get("/:id", getProduct);
+router.get("/:id", authMiddleware, getProduct);
 
-router.post("/", createProduct);
+router.post("/", authMiddleware, createProduct);
 
-router.patch("/:id", updateProduct);
+router.patch("/:id", authMiddleware, updateProduct);
 
-router.delete("/:id", deleteProduct);
+router.delete("/:id", authMiddleware, deleteProduct);
 
 //Creation documentation for register new product
 /**
@@ -51,19 +52,22 @@ router.delete("/:id", deleteProduct);
 /**
  * @swagger
  * /api/v1/products:
- *  post:
- *      summary: Create new product
- *      tags: [Products]
- *      requestBody:
- *          required: true
- *          content:
- *              application/json:
- *                  schema:
- *                      type: object
- *                      $ref: '#/components/schemas/products'
- *      responses:
- *          200:
- *              description: New product create!
+ *   post:
+ *     summary: Create new product
+ *     tags: [Products]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/products'
+ *     responses:
+ *       201:
+ *         description: New product created successfully.
+ *       401:
+ *         description: Unauthorized.
  */
 
 //Endpoint get all products
@@ -73,6 +77,8 @@ router.delete("/:id", deleteProduct);
  *  get:
  *      summary: Return all products
  *      tags: [Products]
+ *      security:
+ *       - bearerAuth: []
  *      responses:
  *          200:
  *              description: All products
@@ -91,6 +97,8 @@ router.delete("/:id", deleteProduct);
  *  get:
  *      summary: Return a product for identifier unique
  *      tags: [Products]
+ *      security:
+ *       - bearerAuth: []
  *      parameters:
  *        - in: path
  *          name: id
@@ -117,6 +125,8 @@ router.delete("/:id", deleteProduct);
  *  patch:
  *      summary: Update a product
  *      tags: [Products]
+ *      security:
+ *       - bearerAuth: []
  *      parameters:
  *        - in: path
  *          name: id
@@ -150,6 +160,8 @@ router.delete("/:id", deleteProduct);
  *  delete:
  *      summary: Delete a product
  *      tags: [Products]
+ *      security:
+ *       - bearerAuth: []
  *      parameters:
  *        - in: path
  *          name: id

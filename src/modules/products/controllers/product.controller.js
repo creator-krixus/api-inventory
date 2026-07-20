@@ -4,8 +4,7 @@ import * as productService from "../services/product.service.js";
 // Get all
 export const getProducts = async (req, res) => {
   try {
-
-    const products = await productService.getAllProducts();
+    const products = await productService.getAllProducts(req.user.organizationId);
 
     res.json(products);
 
@@ -33,7 +32,8 @@ export const getProduct = async (req, res) => {
 
     }
 
-    const product = await productService.getProductById(id);
+    const product = await productService.getProductById(id,
+      req.user.organizationId);
 
     if (!product) {
 
@@ -60,7 +60,10 @@ export const createProduct = async (req, res) => {
 
   try {
 
-    const product = await productService.createProduct(req.body);
+    const product = await productService.createProduct({
+      ...req.body,
+      organizationId: req.user.organizationId,
+    });
 
     res.status(201).json(product);
 
@@ -91,6 +94,7 @@ export const updateProduct = async (req, res) => {
 
     const product = await productService.updateProduct(
       id,
+      req.user.organizationId,
       req.body
     );
 
@@ -129,7 +133,8 @@ export const deleteProduct = async (req, res) => {
 
     }
 
-    const product = await productService.deleteProduct(id);
+    const product = await productService.deleteProduct(id,
+      req.user.organizationId);
 
     if (!product) {
 

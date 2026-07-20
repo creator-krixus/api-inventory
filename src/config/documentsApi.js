@@ -20,7 +20,16 @@ const swaggerSpec = {
         url: "https://api-inventory-v7ca.onrender.com",
         description: "Servidor de producción"
       }
-    ]
+    ],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT"
+        }
+      }
+    }
   },
   apis: ["./src/modules/**/*.routes.js"]
 }
