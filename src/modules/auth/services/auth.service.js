@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 
 import User from "../../users/models/user.model.js";
 import Organization from "../../organizations/models/organizations.model.js";
+import Subscription from "../../subscriptions/models/subscription.model.js";
 
 const generateToken = (user) => {
   return jwt.sign(
@@ -58,6 +59,23 @@ const signup = async ({ organizationName, name, email, password }) => {
       { session }
     );
 
+    // Toda organización nueva arranca con un período de prueba, sin necesidad de tarjeta
+    const trialDays = Number(process.env.TRIAL_DAYS || 14);
+    const trialEnd = new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000);
+
+    await Subscription.create(
+      [
+        {
+          organizationId: organization[0]._id,
+          status: "trialing",
+          customerEmail: email.toLowerCase(),
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: trialEnd,
+        },
+      ],
+      { session }
+    );
+
     await session.commitTransaction();
 
     const token = generateToken(user[0]);
@@ -71,6 +89,10 @@ const signup = async ({ organizationName, name, email, password }) => {
         name: user[0].name,
         email: user[0].email,
         role: user[0].role,
+      },
+      subscription: {
+        status: "trialing",
+        trialEndsAt: trialEnd,
       },
     };
   } catch (error) {
