@@ -7,6 +7,16 @@ import {
 
 const MAX_TOOL_ITERATIONS = 6;
 
+// Cuántos "turnos" (mensaje del usuario + respuesta final del agente,
+// incluyendo los tool calls intermedios de ese turno) se conservan como
+// máximo en el historial antes de recortar los más viejos. Cada turno
+// nuevo hace más caro el siguiente mensaje (se reenvía todo el historial
+// a la API), así que este límite evita que el costo crezca sin fin en
+// conversaciones muy largas. Configurable por env var.
+const getMaxHistoryTurns = () => Number(process.env.AGENT_MAX_HISTORY_TURNS) || 10;
+
+const CACHE_CONTROL = { type: "ephemeral" };
+
 // Cliente perezoso: NO se crea al importar el módulo. Si se instanciara a
 // nivel de módulo, en ESM los imports (y por tanto este archivo) se
 // resuelven antes que dotenv.config() corra en server.js, así que
@@ -74,6 +84,62 @@ const buildToolResultBlock = (toolUseBlock, result, isError = false) => ({
   is_error: isError,
 });
 
+// Un "turno" nuevo siempre arranca con un mensaje { role:"user", content: string }
+// (el texto real que escribió el usuario) — los tool_result que se agregan
+// durante el loop de tools son { role:"user", content: [...] } (array), no
+// string, así que no cuentan como inicio de turno. chatWithAgent solo
+// devuelve el history cuando el loop terminó en una respuesta final (nunca
+// a mitad de un tool call), así que el `history` que llega aquí siempre
+// contiene turnos completos — es seguro cortar justo en un límite de turno
+// sin partir un tool_use/tool_result a la mitad.
+const trimHistoryToLastTurns = (history, maxTurns) => {
+  const turnStartIndexes = [];
+
+  history.forEach((entry, index) => {
+    if (entry.role === "user" && typeof entry.content === "string") {
+      turnStartIndexes.push(index);
+    }
+  });
+
+  if (turnStartIndexes.length <= maxTurns) {
+    return history;
+  }
+
+  const cutIndex = turnStartIndexes[turnStartIndexes.length - maxTurns];
+  return history.slice(cutIndex);
+};
+
+// Marca el ÚLTIMO bloque del ÚLTIMO mensaje con un breakpoint de prompt
+// caching, y limpia cualquier breakpoint que hubiera quedado de una
+// llamada anterior (Anthropic permite máximo 4 breakpoints por request;
+// solo necesitamos uno activo al final). Como el historial se reenvía
+// completo turno a turno, todo lo anterior al breakpoint es un prefijo
+// idéntico al de la llamada previa, así que Claude lo sirve desde caché
+// en vez de volver a cobrarlo como tokens de entrada nuevos.
+// IMPORTANTE: esto se aplica solo sobre una copia usada para la llamada a
+// la API — nunca se persiste en el `messages`/`history` que se guarda o
+// se le devuelve al cliente.
+const withCacheControl = (messages) => {
+  const cloned = messages.map((entry) => ({
+    ...entry,
+    content:
+      typeof entry.content === "string"
+        ? entry.content
+        : entry.content.map(({ cache_control, ...block }) => block),
+  }));
+
+  const last = cloned[cloned.length - 1];
+
+  if (typeof last.content === "string") {
+    last.content = [{ type: "text", text: last.content, cache_control: CACHE_CONTROL }];
+  } else {
+    const blocks = last.content;
+    blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: CACHE_CONTROL };
+  }
+
+  return cloned;
+};
+
 // `history` es la lista de mensajes previos (formato Anthropic: {role, content})
 // que el cliente reenvía en cada request para mantener el contexto de la
 // conversación. El servidor es stateless: no persiste conversaciones.
@@ -84,7 +150,8 @@ export const chatWithAgent = async ({ message, history = [], organizationId, use
     throw new ApiError(400, "message is required.");
   }
 
-  const messages = [...history, { role: "user", content: message }];
+  const trimmedHistory = trimHistoryToLastTurns(history, getMaxHistoryTurns());
+  const messages = [...trimmedHistory, { role: "user", content: message }];
 
   let iterations = 0;
 
@@ -94,9 +161,11 @@ export const chatWithAgent = async ({ message, history = [], organizationId, use
     const response = await anthropic.messages.create({
       model: getModel(),
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      tools: agentToolDefinitions,
-      messages,
+      system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: CACHE_CONTROL }],
+      tools: agentToolDefinitions.map((tool, index, arr) =>
+        index === arr.length - 1 ? { ...tool, cache_control: CACHE_CONTROL } : tool
+      ),
+      messages: withCacheControl(messages),
     });
 
     messages.push({ role: "assistant", content: response.content });
