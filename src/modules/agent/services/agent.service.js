@@ -37,9 +37,17 @@ const getAnthropicClient = () => {
 
 const getModel = () => process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
 
+// Límites duros de la API de Anthropic para contenido multimedia.
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
+const MAX_DOCUMENT_BYTES = 32 * 1024 * 1024; // 32 MB
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const ALLOWED_DOCUMENT_TYPES = ["application/pdf"];
+
 const SYSTEM_PROMPT = `Eres el asistente de inventario de esta organización. Ayudas al usuario a
 consultar productos y registrar movimientos de stock (ingresos, salidas y
 ajustes) a partir de mensajes de texto en español, en lenguaje natural.
+También puedes recibir fotos o PDFs de facturas de compra, que debes leer
+tú mismo (tienes visión) para extraer la información.
 
 Reglas importantes:
 - Todas las cantidades y precios deben confirmarse con el usuario antes de
@@ -69,6 +77,18 @@ Reglas importantes:
   campo reference al llamar la tool y el sistema le asignará uno
   automáticamente. Después de crear el producto, dile al usuario cuál
   quedó asignado.
+- Cuando el usuario adjunta una foto o PDF de una factura de compra: lee
+  con cuidado cada línea (nombre del producto, cantidad, costo unitario).
+  Para cada línea, busca si el producto ya existe en el inventario (usa
+  list_products o get_product) comparando por nombre, no asumas que la
+  referencia de la factura coincide con tu SKU interno. Luego responde en
+  texto UN SOLO resumen con TODAS las líneas leídas (producto, cantidad,
+  costo, y si ya existe o habría que crearlo) y pide confirmación general
+  antes de ejecutar nada — NUNCA registres movimientos ni crees productos
+  directamente a partir de una imagen sin que el usuario confirme los
+  datos leídos, ya que la lectura de una foto puede tener errores (mala
+  letra, foto borrosa, etc.). Si algún dato es ilegible o dudoso,
+  dilo explícitamente en vez de inventarlo.
 - Responde siempre en español, de forma breve y clara, como si fueras un
   compañero de bodega que además sabe usar el sistema. No expongas
   detalles técnicos (ids de Mongo, nombres de funciones, etc).
@@ -84,19 +104,27 @@ const buildToolResultBlock = (toolUseBlock, result, isError = false) => ({
   is_error: isError,
 });
 
-// Un "turno" nuevo siempre arranca con un mensaje { role:"user", content: string }
-// (el texto real que escribió el usuario) — los tool_result que se agregan
-// durante el loop de tools son { role:"user", content: [...] } (array), no
-// string, así que no cuentan como inicio de turno. chatWithAgent solo
-// devuelve el history cuando el loop terminó en una respuesta final (nunca
-// a mitad de un tool call), así que el `history` que llega aquí siempre
-// contiene turnos completos — es seguro cortar justo en un límite de turno
-// sin partir un tool_use/tool_result a la mitad.
+// Un "turno" nuevo siempre arranca con un mensaje del usuario que es texto
+// plano (string) O un array que empieza con un bloque real (imagen,
+// documento, texto) — nunca con un tool_result. Los mensajes que el loop
+// de tools agrega a mitad de turno son { role:"user", content: [...] }
+// donde TODOS los bloques son tool_result, así que se distinguen mirando
+// el primer bloque. chatWithAgent solo devuelve el history cuando el loop
+// terminó en una respuesta final (nunca a mitad de un tool call), así que
+// el `history` que llega aquí siempre contiene turnos completos — es
+// seguro cortar justo en un límite de turno sin partir un
+// tool_use/tool_result a la mitad.
+const isTurnStart = (entry) => {
+  if (entry.role !== "user") return false;
+  if (typeof entry.content === "string") return true;
+  return Array.isArray(entry.content) && entry.content[0]?.type !== "tool_result";
+};
+
 const trimHistoryToLastTurns = (history, maxTurns) => {
   const turnStartIndexes = [];
 
   history.forEach((entry, index) => {
-    if (entry.role === "user" && typeof entry.content === "string") {
+    if (isTurnStart(entry)) {
       turnStartIndexes.push(index);
     }
   });
@@ -140,18 +168,70 @@ const withCacheControl = (messages) => {
   return cloned;
 };
 
+// Valida el adjunto (imagen o PDF) que mandó el frontend y arma el bloque
+// de contenido que espera la API de Anthropic. Se valida el tamaño real en
+// bytes (no el tamaño en base64, que es ~33% más grande) por seguridad,
+// aunque el frontend ya debería haber comprimido/rechazado archivos
+// grandes antes de llegar aquí — nunca hay que confiar solo en el cliente.
+const buildAttachmentBlock = (attachment) => {
+  const { kind, mediaType, data } = attachment;
+
+  if (!data || typeof data !== "string") {
+    throw new ApiError(400, "attachment.data es requerido (base64).");
+  }
+
+  const approxBytes = Math.floor((data.length * 3) / 4);
+
+  if (kind === "image") {
+    if (!ALLOWED_IMAGE_TYPES.includes(mediaType)) {
+      throw new ApiError(400, `Tipo de imagen no soportado: ${mediaType}.`);
+    }
+    if (approxBytes > MAX_IMAGE_BYTES) {
+      throw new ApiError(400, "La imagen supera el máximo de 5 MB permitido.");
+    }
+    return { type: "image", source: { type: "base64", media_type: mediaType, data } };
+  }
+
+  if (kind === "document") {
+    if (!ALLOWED_DOCUMENT_TYPES.includes(mediaType)) {
+      throw new ApiError(400, `Tipo de documento no soportado: ${mediaType}.`);
+    }
+    if (approxBytes > MAX_DOCUMENT_BYTES) {
+      throw new ApiError(400, "El PDF supera el máximo de 32 MB permitido.");
+    }
+    return { type: "document", source: { type: "base64", media_type: mediaType, data } };
+  }
+
+  throw new ApiError(400, `attachment.kind inválido: ${kind}. Debe ser "image" o "document".`);
+};
+
 // `history` es la lista de mensajes previos (formato Anthropic: {role, content})
 // que el cliente reenvía en cada request para mantener el contexto de la
 // conversación. El servidor es stateless: no persiste conversaciones.
-export const chatWithAgent = async ({ message, history = [], organizationId, userId }) => {
+export const chatWithAgent = async ({ message, history = [], organizationId, userId, attachment }) => {
   const anthropic = getAnthropicClient();
 
-  if (!message || typeof message !== "string" || !message.trim()) {
-    throw new ApiError(400, "message is required.");
+  const trimmedMessage = typeof message === "string" ? message.trim() : "";
+
+  if (!trimmedMessage && !attachment) {
+    throw new ApiError(400, "message o attachment son requeridos.");
+  }
+
+  // Si el usuario solo adjunta el archivo sin escribir nada, se le da al
+  // modelo una instrucción por defecto para que sepa qué hacer.
+  const textForModel = trimmedMessage || "Adjunto la foto/PDF de una factura de compra. Revísala y dime qué encontraste.";
+
+  let userContent = textForModel;
+
+  if (attachment) {
+    const attachmentBlock = buildAttachmentBlock(attachment);
+    // La imagen/documento va primero, seguido del texto — es el orden que
+    // recomienda Anthropic para que el modelo interprete mejor el adjunto.
+    userContent = [attachmentBlock, { type: "text", text: textForModel }];
   }
 
   const trimmedHistory = trimHistoryToLastTurns(history, getMaxHistoryTurns());
-  const messages = [...trimmedHistory, { role: "user", content: message }];
+  const messages = [...trimmedHistory, { role: "user", content: userContent }];
 
   let iterations = 0;
 
