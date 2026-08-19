@@ -240,7 +240,13 @@ export const chatWithAgent = async ({ message, history = [], organizationId, use
 
     const response = await anthropic.messages.create({
       model: getModel(),
-      max_tokens: 1024,
+      // 1024 se quedaba corto para tareas con imagen: Claude gasta parte
+      // del presupuesto "pensando" internamente antes de escribir texto o
+      // llamar una tool, y con poco margen la respuesta podía cortarse a
+      // mitad de ese razonamiento (reply vacío). max_tokens es solo un
+      // TECHO, no un gasto garantizado — subirlo no cuesta más a menos
+      // que el modelo realmente lo use.
+      max_tokens: 4096,
       system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: CACHE_CONTROL }],
       tools: agentToolDefinitions.map((tool, index, arr) =>
         index === arr.length - 1 ? { ...tool, cache_control: CACHE_CONTROL } : tool
@@ -252,8 +258,20 @@ export const chatWithAgent = async ({ message, history = [], organizationId, use
 
     if (response.stop_reason !== "tool_use") {
       const textBlock = response.content.find((block) => block.type === "text");
+
+      if (!textBlock) {
+        // No debería pasar con max_tokens=4096, pero por si acaso: mejor
+        // avisar claramente que dejar una burbuja vacía en el chat.
+        console.warn(
+          "[agent] Respuesta sin bloque de texto. stop_reason:",
+          response.stop_reason,
+          "| content types:",
+          response.content.map((b) => b.type)
+        );
+      }
+
       return {
-        reply: textBlock?.text ?? "",
+        reply: textBlock?.text || "No pude generar una respuesta esta vez. ¿Puedes intentar de nuevo?",
         history: messages,
       };
     }
